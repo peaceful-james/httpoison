@@ -36,7 +36,8 @@ defmodule HTTPoison.Request do
       a `MaybeRedirect` struct. See: HTTPoison.MaybeRedirect
     * `:max_redirect` - an integer denoting the maximum number of redirects to follow. Default is 5
     * `:params` - an enumerable consisting of two-item tuples that will be appended to the url as query string parameters
-    * `:max_body_length` - a non-negative integer denoting the max response body length. See :hackney.body/2
+    * `:max_body_length` - a non-negative integer denoting the max response body length. The full
+      body is read from the socket and then truncated to this many bytes before being returned.
 
     Timeouts can be an integer or `:infinity`
   """

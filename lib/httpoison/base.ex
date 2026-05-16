@@ -774,7 +774,7 @@ defmodule HTTPoison.Base do
         # Extract the host from the URL just like hackney does
         host = hackney_url_record(:hackney_url.parse_url(url), :host)
 
-        :hackney_connection.merge_ssl_opts(host, ssl_opts)
+        :hackney_ssl.ssl_opts(host, ssl_options: ssl_opts)
       else
         Keyword.get(options, :ssl_override)
       end
@@ -913,32 +913,17 @@ defmodule HTTPoison.Base do
               request
             )
 
-          {:ok, status_code, headers, client} ->
-            max_length = Keyword.get(request.options, :max_body_length, :infinity)
+          {:ok, status_code, headers, body} ->
+            body = maybe_truncate_body(body, request.options)
 
-            case :hackney.body(client, max_length) do
-              {:ok, body} ->
-                response(
-                  process_response_status_code,
-                  process_response_headers,
-                  process_response_body,
-                  process_response,
-                  status_code,
-                  headers,
-                  body,
-                  request
-                )
-
-              {:error, reason} ->
-                {:error, %Error{reason: reason}}
-            end
-
-          {:ok, {:maybe_redirect, status_code, headers, _client}} ->
-            maybe_redirect(
+            response(
               process_response_status_code,
               process_response_headers,
+              process_response_body,
+              process_response,
               status_code,
               headers,
+              body,
               request
             )
 
@@ -946,9 +931,6 @@ defmodule HTTPoison.Base do
             {:ok, %HTTPoison.AsyncResponse{id: id}}
 
           {:error, reason} ->
-            {:error, %Error{reason: reason}}
-
-          {:connect_error, {:error, reason}} ->
             {:error, %Error{reason: reason}}
         end
 
@@ -963,6 +945,7 @@ defmodule HTTPoison.Base do
       failures =
         Stream.transform(enumerable, :ok, fn
           _, :error -> {:halt, :error}
+          "", :ok -> {[], :ok}
           bin, :ok -> {[], :hackney.send_body(ref, bin)}
           _, error -> {[error], :error}
         end)
@@ -970,7 +953,11 @@ defmodule HTTPoison.Base do
 
       case failures do
         [] ->
-          :hackney.start_response(ref)
+          with :ok <- :hackney.finish_send_body(ref),
+               {:ok, status, headers, conn} <- :hackney.start_response(ref),
+               {:ok, body} <- :hackney_conn.body(conn) do
+            {:ok, status, headers, body}
+          end
 
         [failure] ->
           failure
@@ -980,6 +967,19 @@ defmodule HTTPoison.Base do
 
   defp do_request(request, hn_options) do
     :hackney.request(request.method, request.url, request.headers, request.body, hn_options)
+  end
+
+  defp maybe_truncate_body(body, options) do
+    case Keyword.get(options, :max_body_length, :infinity) do
+      :infinity ->
+        body
+
+      max when is_integer(max) and byte_size(body) > max ->
+        binary_part(body, 0, max)
+
+      _ ->
+        body
+    end
   end
 
   defp response(
@@ -1001,32 +1001,6 @@ defmodule HTTPoison.Base do
        request_url: request.url
      }
      |> process_response.()}
-  end
-
-  defp maybe_redirect(
-         process_response_status_code,
-         process_response_headers,
-         status_code,
-         headers,
-         request
-       ) do
-    {:ok,
-     %MaybeRedirect{
-       status_code: process_response_status_code.(status_code),
-       headers: process_response_headers.(headers),
-       request: request,
-       request_url: request.url,
-       redirect_url: get_header(headers, "Location", nil)
-     }}
-  end
-
-  defp get_header(headers, key, default) do
-    key = String.downcase(key)
-
-    Enum.find_value(headers, default, fn
-      {k, v} -> if String.downcase(k) == key, do: v, else: nil
-      _ -> nil
-    end)
   end
 
   def maybe_process_form({:form, body}) do

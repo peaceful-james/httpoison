@@ -46,19 +46,34 @@ defmodule HTTPoison.Handlers.Multipart do
   """
   def decode_body(%Response{body: body, headers: headers}) do
     try do
-      case :hackney_headers.parse("Content-Type", headers) do
-        {"multipart", _, [{"boundary", boundary} | _]} ->
-          case :hackney_multipart.decode_form(boundary, body) do
-            {:ok, []} -> body
-            {:ok, parsed} -> parsed
-            {_, _} -> body
-          end
-
-        _ ->
+      case content_type(headers) do
+        nil ->
           body
+
+        value ->
+          case :hackney_headers.parse_content_type(value) do
+            {"multipart", _, [{"boundary", boundary} | _]} ->
+              case :hackney_multipart.decode_form(boundary, body) do
+                {:ok, []} -> body
+                {:ok, parsed} -> parsed
+                {_, _} -> body
+              end
+
+            _ ->
+              body
+          end
       end
     rescue
       _ in ErlangError -> body
     end
   end
+
+  defp content_type(headers) when is_list(headers) do
+    Enum.find_value(headers, fn
+      {k, v} -> if String.downcase(to_string(k)) == "content-type", do: v
+      _ -> nil
+    end)
+  end
+
+  defp content_type(_), do: nil
 end
